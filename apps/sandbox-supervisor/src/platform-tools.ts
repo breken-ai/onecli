@@ -166,8 +166,12 @@ export const startPlatformTools = async (
     socket.on("error", (error) => {
       log("warn", "platform-tools socket error", { error: String(error) });
     });
-    socket.on("data", (chunk) => {
-      buffer += chunk.toString("utf8");
+    // Decode per connection, not per chunk: a read can end inside a
+    // multibyte character, and decoding each chunk alone turns both halves
+    // into U+FFFD. The stream's decoder carries the partial bytes over.
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk: string) => {
+      buffer += chunk;
       // A newline-less stream must not grow this process's heap forever —
       // the agent shares the container and can dial this socket directly.
       // Well above any legal frame (args cap at 32k), so only abuse trips it.

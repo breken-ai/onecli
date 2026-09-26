@@ -192,6 +192,48 @@ describe("platform tools", () => {
     expect(sent).toHaveLength(0);
   });
 
+  it("keeps a multibyte character split across socket reads intact in the relayed args", async () => {
+    const { sent, socketPath } = await rig();
+    const client: Socket = await new Promise((resolve, reject) => {
+      const c = createConnection(socketPath, () => resolve(c));
+      c.once("error", reject);
+    });
+    cleanup.push(() => void client.destroy());
+
+    const frame = Buffer.from(
+      `${JSON.stringify({ id: "split", op: "call", tool: "schedule_task", args: { name: "daily ✅ 日本語" } })}\n`,
+    );
+    // Cut inside the three bytes of ✅ (E2 9C 85), as a socket read can.
+    const cut = frame.indexOf(Buffer.from("✅")) + 1;
+    client.write(frame.subarray(0, cut));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    client.write(frame.subarray(cut));
+
+    await expect.poll(() => sent.length).toBe(1);
+    const call = sent[0] as Extract<SupervisorMessage, { kind: "tool.call" }>;
+    expect(call.args).toEqual({ name: "daily ✅ 日本語" });
+  });
+
+  it("relays a large non-ASCII argument written in one piece unchanged", async () => {
+    const { sent, socketPath } = await rig();
+    const client: Socket = await new Promise((resolve, reject) => {
+      const c = createConnection(socketPath, () => resolve(c));
+      c.once("error", reject);
+    });
+    cleanup.push(() => void client.destroy());
+
+    // ~75 KB on the wire but under the 32k-character cap: the server reads
+    // it in several chunks, whose edges fall inside characters.
+    const name = "日本語のメモ".repeat(4_000);
+    client.write(
+      `${JSON.stringify({ id: "big", op: "call", tool: "schedule_task", args: { name } })}\n`,
+    );
+
+    await expect.poll(() => sent.length).toBe(1);
+    const call = sent[0] as Extract<SupervisorMessage, { kind: "tool.call" }>;
+    expect((call.args as { name: string }).name).toBe(name);
+  });
+
   it("bounds oversized arguments at the sender instead of shipping a droppable frame", async () => {
     const { sent, request } = await rig();
     const answer = await request({

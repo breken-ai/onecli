@@ -105,6 +105,14 @@ const sectionChunks = (text: string): string[] => {
       const close = rest.indexOf(">", open);
       if (close === -1 || close >= cut) cut = open;
     }
+    // Nor inside an escaped entity (`&amp;`, `&lt;`, `&gt;` — the converter's
+    // only ones, at most 5 chars) or between a surrogate pair's halves: either
+    // half renders as literal `&amp` / `;` or a replacement character.
+    const amp = rest.lastIndexOf("&", cut - 1);
+    if (amp !== -1 && amp > cut - 5 && !rest.slice(amp, cut).includes(";")) {
+      cut = amp;
+    }
+    if (/[\uD800-\uDBFF]/.test(rest.charAt(cut - 1))) cut -= 1;
     chunks.push(rest.slice(0, cut));
     rest = rest.slice(cut).replace(/^\n/, "");
   }

@@ -594,6 +594,43 @@ describe("what gets posted", () => {
     }
   });
 
+  it("never cuts a section chunk inside an emoji or an escaped entity", async () => {
+    // A hard cut (no newline in the window's back half) at 2,900 can land
+    // between the two UTF-16 halves of an emoji, or inside the `&amp;` the
+    // converter wrote for a `&`. Either half then renders as a replacement
+    // character or as literal `&amp` + `;`.
+    for (const [straddler, whole] of [
+      [`${"x".repeat(2_899)}😀${"y".repeat(3_000)}`, "😀"],
+      [`${"x".repeat(2_897)}&${"y".repeat(3_000)}`, "&amp;"],
+    ] as const) {
+      const before = slack.callsTo("chat.postMessage").length;
+      const controlPlane = createFakeControlPlane(
+        transcriptWith(
+          `${straddler}\nAttach: https://app.example.com/w/ws1/connections/apps/google-calendar`,
+        ),
+      );
+
+      await mirror({
+        controlPlane,
+        workItem: item({ source: "slack" }),
+        chatUrl: "https://app.example.com/w/ws1/agents/ag1/chat",
+      });
+
+      const posted = slack.callsTo("chat.postMessage").slice(before);
+      expect(posted).toHaveLength(1);
+      const blocks = JSON.parse(posted[0]!.form.blocks!) as {
+        type: string;
+        text?: { text: string };
+      }[];
+      const sections = blocks
+        .filter((b) => b.type === "section")
+        .map((b) => b.text!.text);
+      expect(sections.length).toBeGreaterThan(1);
+      expect(sections[0]!.endsWith("x")).toBe(true);
+      expect(sections[1]!.startsWith(whole)).toBe(true);
+    }
+  });
+
   it("survives a connect link nested inside another connect link's markdown label", async () => {
     // The wrapper rewind makes the outer link's span start before the inner
     // link's end; the backwards slice must stay empty — no duplicated prose,
